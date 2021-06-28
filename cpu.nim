@@ -18,6 +18,7 @@ type CPU* = ref object
   register_y*: uint8
   status*: uint8 #NV-BDIZC
   program_counter*: uint16
+  stack_pointer*: uint8
   memory*: array[0xFFFF,uint8]
 
 type Opcode = object
@@ -112,7 +113,8 @@ proc get_operand_address(self: CPU, mode: AddressingMode): uint16 =
 proc reset*(self: CPU) =
   self.register_a = 0
   self.register_x = 0
-  self.status = 0
+  self.status = 0x20
+  self.stack_pointer = 0xff
   self.program_counter = 0
   self.program_counter = self.mem_read_uint16(0xFFFC)
 
@@ -157,6 +159,18 @@ proc lda(self: CPU, mode: AddressingMode) =
   self.register_a = value
   self.update_zero_and_negative_flags(self.register_a)
 
+proc sta(self: CPU, mode: AddressingMode) =
+  let adr = self.get_operand_address(mode)
+  self.mem_write(adr, self.register_a)
+
+proc stx(self: CPU, mode: AddressingMode) =
+  let adr = self.get_operand_address(mode)
+  self.mem_write(adr, self.register_x)
+
+proc sty(self: CPU, mode: AddressingMode) =
+  let adr = self.get_operand_address(mode)
+  self.mem_write(adr, self.register_y)
+
 proc cmp(self: CPU, mode: AddressingMode) =
   let adr = self.get_operand_address(mode)
   let value = self.mem_read(adr)
@@ -170,6 +184,53 @@ proc cmp(self: CPU, mode: AddressingMode) =
 
   # set Z if A == result
   if self.register_a == value:
+    self.status = (self.status or 0x02)
+  else:
+    self.status = (self.status and 0xfd)
+
+  # set N if result is negative
+  if (result and 0x80) == 0x80:
+    self.status = (self.status or 0x80)
+  else:
+    self.status = (self.status and 0xef)
+
+proc cpx(self: CPU, mode: AddressingMode) =
+  let adr = self.get_operand_address(mode)
+  let value = self.mem_read(adr)
+  let result = self.register_x - value
+
+  # set C if A >= result
+  if self.register_x >= value:
+    self.status = (self.status or 0x01)
+  else:
+    self.status = (self.status and 0xfe)
+
+  # set Z if A == result
+  if self.register_x == value:
+    self.status = (self.status or 0x02)
+  else:
+    self.status = (self.status and 0xfd)
+
+  # set N if result is negative
+  if (result and 0x80) == 0x80:
+    self.status = (self.status or 0x80)
+  else:
+    self.status = (self.status and 0xef)
+
+
+proc cpy(self: CPU, mode: AddressingMode) =
+  let adr = self.get_operand_address(mode)
+  let value = self.mem_read(adr)
+  let result = self.register_y - value
+
+  # set C if A >= result
+  if self.register_y >= value:
+    self.status = (self.status or 0x01)
+  else:
+    self.status = (self.status and 0xfe)
+
+  # set Z if A == result
+  if self.register_y == value:
     self.status = (self.status or 0x02)
   else:
     self.status = (self.status and 0xfd)
@@ -291,6 +352,26 @@ proc bit(self: CPU, mode: AddressingMode) =
 proc tax(self: CPU, mode: AddressingMode) =
   self.register_x = self.register_a
   self.update_zero_and_negative_flags(self.register_x)
+
+proc tay(self: CPU, mode: AddressingMode) =
+  self.register_y = self.register_a
+  self.update_zero_and_negative_flags(self.register_y)
+
+proc tsx(self: CPU, mode: AddressingMode) =
+  self.register_x = self.stack_pointer
+  self.update_zero_and_negative_flags(self.register_x)
+
+proc txa(self: CPU, mode: AddressingMode) =
+  self.register_a = self.register_x
+  self.update_zero_and_negative_flags(self.register_a)
+
+proc txs(self: CPU, mode: AddressingMode) =
+  self.stack_pointer = self.register_x
+  self.update_zero_and_negative_flags(self.register_x)
+
+proc tya(self: CPU, mode: AddressingMode) =
+  self.register_a = self.register_y
+  self.update_zero_and_negative_flags(self.register_a)
 
 proc inx(self: CPU, mode: AddressingMode) =
   if self.register_x == 0xff:
@@ -425,7 +506,30 @@ proc build_opcode_table(): Table[uint8, Opcode] =
   opcodes[0xd9] = new_opcode(0xd9, "cmp", cmp, 3, 4, AddressingMode.AbsoluteY) # +1 if page crossed
   opcodes[0xc1] = new_opcode(0xc1, "cmp", cmp, 2, 6, AddressingMode.IndirectX)
   opcodes[0xd1] = new_opcode(0xd1, "cmp", cmp, 2, 5, AddressingMode.IndirectY) # +1 if page crossed
-
+  opcodes[0xe0] = new_opcode(0xe0, "cpx", cpx, 2, 2, AddressingMode.Immediate)
+  opcodes[0xe4] = new_opcode(0xe4, "cpx", cpx, 2, 3, AddressingMode.ZeroPage)
+  opcodes[0xec] = new_opcode(0xec, "cpx", cpx, 3, 5, AddressingMode.Absolute)
+  opcodes[0xc0] = new_opcode(0xc0, "cpy", cpy, 2, 2, AddressingMode.Immediate)
+  opcodes[0xc4] = new_opcode(0xc4, "cpy", cpy, 2, 3, AddressingMode.ZeroPage)
+  opcodes[0xcc] = new_opcode(0xcc, "cpy", cpy, 3, 5, AddressingMode.Absolute)
+  opcodes[0x85] = new_opcode(0x85, "sta", sta, 2, 3, AddressingMode.ZeroPage)
+  opcodes[0x95] = new_opcode(0x95, "sta", sta, 2, 4, AddressingMode.ZeroPageX)
+  opcodes[0x8d] = new_opcode(0x8d, "sta", sta, 3, 4, AddressingMode.Absolute)
+  opcodes[0x9d] = new_opcode(0x9d, "sta", sta, 3, 5, AddressingMode.AbsoluteX)
+  opcodes[0x99] = new_opcode(0x99, "sta", sta, 3, 5, AddressingMode.AbsoluteY)
+  opcodes[0x81] = new_opcode(0x81, "sta", sta, 2, 6, AddressingMode.IndirectX)
+  opcodes[0x91] = new_opcode(0x91, "sta", sta, 2, 6, AddressingMode.IndirectY)
+  opcodes[0x86] = new_opcode(0x86, "stx", stx, 2, 3, AddressingMode.ZeroPage)
+  opcodes[0x96] = new_opcode(0x96, "stx", stx, 2, 4, AddressingMode.ZeroPageY)
+  opcodes[0x8e] = new_opcode(0x8e, "stx", stx, 3, 4, AddressingMode.Absolute)
+  opcodes[0x84] = new_opcode(0x84, "sty", sty, 2, 3, AddressingMode.ZeroPage)
+  opcodes[0x94] = new_opcode(0x94, "sty", sty, 2, 4, AddressingMode.ZeroPageX)
+  opcodes[0x8c] = new_opcode(0x8c, "sty", sty, 3, 4, AddressingMode.Absolute)
+  opcodes[0xa8] = new_opcode(0xa8, "tay", tay, 1, 2, AddressingMode.NoneAddressing)
+  opcodes[0xba] = new_opcode(0xba, "tsx", tsx, 1, 2, AddressingMode.NoneAddressing)
+  opcodes[0x8a] = new_opcode(0x8a, "txa", txa, 1, 2, AddressingMode.NoneAddressing)
+  opcodes[0x9a] = new_opcode(0x9a, "txs", txs, 1, 2, AddressingMode.NoneAddressing)
+  opcodes[0x98] = new_opcode(0x98, "tya", tya, 1, 2, AddressingMode.NoneAddressing)
 
   return opcodes
 
