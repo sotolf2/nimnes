@@ -213,8 +213,27 @@ proc beq(self: CPU, mode: AddressingMode) =
     #echo fmt"bcc value: {value:x}"
     self.branch_relative(value)
 
+proc bne(self: CPU, mode: AddressingMode) =
+  if (self.status and 0x02) == 0x00:
+    let adr = self.get_operand_address(mode)
+    let value = self.mem_read(adr)
+    #echo fmt"bcc value: {value:x}"
+    self.branch_relative(value)
+
 proc bmi(self: CPU, mode: AddressingMode) =
   if (self.status and 0x80) == 0x80:
+    let adr = self.get_operand_address(mode)
+    let value = self.mem_read(adr)
+    self.branch_relative(value)
+
+proc bpl(self: CPU, mode: AddressingMode) =
+  if (self.status and 0x80) == 0x00:
+    let adr = self.get_operand_address(mode)
+    let value = self.mem_read(adr)
+    self.branch_relative(value)
+
+proc bvc(self: CPU, mode: AddressingMode) =
+  if (self.status and 0x40) == 0x00:
     let adr = self.get_operand_address(mode)
     let value = self.mem_read(adr)
     self.branch_relative(value)
@@ -349,6 +368,9 @@ proc build_opcode_table(): Table[uint8, Opcode] =
   opcodes[0x24] = new_opcode(0x24, "bit", bit, 2, 3, AddressingMode.ZeroPage)
   opcodes[0x2c] = new_opcode(0x2c, "bit", bit, 3, 4, AddressingMode.Absolute)
   opcodes[0x30] = new_opcode(0x30, "bmi", bmi, 2, 2, AddressingMode.Immediate) # +1 if branch succeeds +2 if to a new page
+  opcodes[0xd0] = new_opcode(0xd0, "bne", bne, 2, 2, AddressingMode.Immediate) # +1 if branch succeeds +2 if to a new page
+  opcodes[0x10] = new_opcode(0x10, "bpl", bpl, 2, 2, AddressingMode.Immediate) # +1 if branch succeeds +2 if to a new page
+  opcodes[0x50] = new_opcode(0x50, "bvc", bvc, 2, 2, AddressingMode.Immediate) # +1 if branch succeeds +2 if to a new page
 
 
   return opcodes
