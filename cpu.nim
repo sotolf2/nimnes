@@ -157,6 +157,29 @@ proc lda(self: CPU, mode: AddressingMode) =
   self.register_a = value
   self.update_zero_and_negative_flags(self.register_a)
 
+proc cmp(self: CPU, mode: AddressingMode) =
+  let adr = self.get_operand_address(mode)
+  let value = self.mem_read(adr)
+  let result = self.register_a - value
+
+  # set C if A >= result
+  if self.register_a >= value:
+    self.status = (self.status or 0x01)
+  else:
+    self.status = (self.status and 0xfe)
+
+  # set Z if A == result
+  if self.register_a == value:
+    self.status = (self.status or 0x02)
+  else:
+    self.status = (self.status and 0xfd)
+
+  # set N if result is negative
+  if (result and 0x80) == 0x80:
+    self.status = (self.status or 0x80)
+  else:
+    self.status = (self.status and 0xef)
+
 proc op_and(self: CPU, mode: AddressingMode) =
   let adr = self.get_operand_address(mode)
   let value = self.mem_read(adr)
@@ -238,6 +261,12 @@ proc bvc(self: CPU, mode: AddressingMode) =
     let value = self.mem_read(adr)
     self.branch_relative(value)
 
+proc bvs(self: CPU, mode: AddressingMode) =
+  if (self.status and 0x40) == 0x40:
+    let adr = self.get_operand_address(mode)
+    let value = self.mem_read(adr)
+    self.branch_relative(value)
+
 proc bit(self: CPU, mode: AddressingMode) =
   let adr = self.get_operand_address(mode)
   let value = self.mem_read(adr)
@@ -272,6 +301,18 @@ proc inx(self: CPU, mode: AddressingMode) =
 
 proc sec(self: CPU, mode: AddressingMode) =
   self.status = (self.status or 0x01'u8)
+
+proc clc(self: CPU, mode: AddressingMode) =
+  self.status = (self.status and 0xfe)
+
+proc cld(self: CPU, mode: AddressingMode) =
+  self.status = (self.status and 0xf7)
+
+proc cli(self: CPU, mode: AddressingMode) =
+  self.status = (self.status and 0xfb)
+
+proc clv(self: CPU, mode: AddressingMode) =
+  self.status = (self.status and 0xbf)
 
 {.push overflowChecks: off.}
 proc adc(self: CPU, mode: AddressingMode) =
@@ -371,6 +412,19 @@ proc build_opcode_table(): Table[uint8, Opcode] =
   opcodes[0xd0] = new_opcode(0xd0, "bne", bne, 2, 2, AddressingMode.Immediate) # +1 if branch succeeds +2 if to a new page
   opcodes[0x10] = new_opcode(0x10, "bpl", bpl, 2, 2, AddressingMode.Immediate) # +1 if branch succeeds +2 if to a new page
   opcodes[0x50] = new_opcode(0x50, "bvc", bvc, 2, 2, AddressingMode.Immediate) # +1 if branch succeeds +2 if to a new page
+  opcodes[0x70] = new_opcode(0x70, "bvs", bvs, 2, 2, AddressingMode.Immediate) # +1 if branch succeeds +2 if to a new page
+  opcodes[0x18] = new_opcode(0x18, "clc", clc, 1, 2, AddressingMode.NoneAddressing)
+  opcodes[0xd8] = new_opcode(0xd8, "cld", cld, 1, 2, AddressingMode.NoneAddressing)
+  opcodes[0x58] = new_opcode(0x58, "cli", cli, 1, 2, AddressingMode.NoneAddressing)
+  opcodes[0xb8] = new_opcode(0xb8, "clv", clv, 1, 2, AddressingMode.NoneAddressing)
+  opcodes[0xc9] = new_opcode(0xc9, "cmp", cmp, 2, 2, AddressingMode.Immediate)
+  opcodes[0xc5] = new_opcode(0xc5, "cmp", cmp, 2, 3, AddressingMode.ZeroPage)
+  opcodes[0xd5] = new_opcode(0xd5, "cmp", cmp, 2, 4, AddressingMode.ZeroPageX)
+  opcodes[0xcd] = new_opcode(0xcd, "cmp", cmp, 3, 4, AddressingMode.Absolute)
+  opcodes[0xdd] = new_opcode(0xdd, "cmp", cmp, 3, 4, AddressingMode.AbsoluteX) # +1 if page crossed
+  opcodes[0xd9] = new_opcode(0xd9, "cmp", cmp, 3, 4, AddressingMode.AbsoluteY) # +1 if page crossed
+  opcodes[0xc1] = new_opcode(0xc1, "cmp", cmp, 2, 6, AddressingMode.IndirectX)
+  opcodes[0xd1] = new_opcode(0xd1, "cmp", cmp, 2, 5, AddressingMode.IndirectY) # +1 if page crossed
 
 
   return opcodes
