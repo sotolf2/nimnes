@@ -38,6 +38,13 @@ proc new_opcode(opcode: uint8, name: string, procedure: proc(self: CPU, mode: Ad
   result.mode = mode
 
 
+proc wrapping_sub(self: uint8, other: uint8): uint8 =
+  if other > self:
+    let rest = other - self
+    return 0xff - rest + 1
+  else:
+    return self - other
+
 proc wrapping_add(self: uint8, other: uint8): uint8 =
   if 0xff - other >= self:
     return self + other
@@ -241,11 +248,33 @@ proc cpy(self: CPU, mode: AddressingMode) =
   else:
     self.status = (self.status and 0xef)
 
+proc dec(self: CPU, mode: AddressingMode) =
+  let adr = self.get_operand_address(mode)
+  let value = self.mem_read(adr)
+  let result = value.wrapping_sub(1)
+  self.mem_write(adr, result)
+  self.update_zero_and_negative_flags(result)
+
+proc dex(self: CPU, mode: AddressingMode) =
+  self.register_x = self.register_x.wrapping_sub(1)
+  self.update_zero_and_negative_flags(self.register_x)
+
+proc dey(self: CPU, mode: AddressingMode) =
+  self.register_y = self.register_y.wrapping_sub(1)
+  self.update_zero_and_negative_flags(self.register_y)
+
 proc op_and(self: CPU, mode: AddressingMode) =
   let adr = self.get_operand_address(mode)
   let value = self.mem_read(adr)
 
   self.register_a = (self.register_a and value)
+  self.update_zero_and_negative_flags(self.register_a)
+
+proc eor(self: CPU, mode: AddressingMode) =
+  let adr = self.get_operand_address(mode)
+  let value = self.mem_read(adr)
+
+  self.register_a = (self.registera xor value)
   self.update_zero_and_negative_flags(self.register_a)
 
 proc asl(self: CPU, mode: AddressingMode) =
@@ -443,93 +472,108 @@ proc brk(self: CPU, mode: AddressingMode) =
 
 proc build_opcode_table(): Table[uint8, Opcode] =
   var opcodes: Table[uint8, Opcode]
-  opcodes[0x00] = new_opcode(0x00, "brk", brk, 1, 7, AddressingMode.NoneAddressing)
-  opcodes[0xaa] = new_opcode(0xaa, "tax", tax, 1, 2, AddressingMode.NoneAddressing)
-  opcodes[0xe8] = new_opcode(0xe8, "inx", inx, 1, 2, AddressingMode.NoneAddressing)
-  opcodes[0xa9] = new_opcode(0xa9, "lda", lda, 2, 2, AddressingMode.Immediate)
-  opcodes[0xa5] = new_opcode(0xa5, "lda", lda, 2, 3, AddressingMode.ZeroPage)
-  opcodes[0xb5] = new_opcode(0xb5, "lda", lda, 2, 4, AddressingMode.ZeroPageX)
-  opcodes[0xad] = new_opcode(0xad, "lda", lda, 3, 4, AddressingMode.Absolute)
-  opcodes[0xbd] = new_opcode(0xbd, "lda", lda, 3, 4, AddressingMode.AbsoluteX) # +1 if page crossed
-  opcodes[0xb9] = new_opcode(0xb9, "lda", lda, 3, 4, AddressingMode.AbsoluteY) # +1 if page crossed
-  opcodes[0xa1] = new_opcode(0xa1, "lda", lda, 2, 6, AddressingMode.IndirectX)
-  opcodes[0xb1] = new_opcode(0xb1, "lda", lda, 2, 5, AddressingMode.IndirectY) # +1 if page crossed
-  opcodes[0x69] = new_opcode(0x69, "adc", adc, 2, 2, AddressingMode.Immediate)
-  opcodes[0x65] = new_opcode(0x65, "adc", adc, 2, 3, AddressingMode.ZeroPage)
-  opcodes[0x75] = new_opcode(0x75, "adc", adc, 2, 4, AddressingMode.ZeroPageX)
-  opcodes[0x6d] = new_opcode(0x6d, "adc", adc, 3, 4, AddressingMode.Absolute)
-  opcodes[0x7d] = new_opcode(0x7d, "adc", adc, 3, 4, AddressingMode.AbsoluteX) # +1 if page crossed
-  opcodes[0x79] = new_opcode(0x79, "adc", adc, 3, 4, AddressingMode.AbsoluteY) # +1 if page crossed
-  opcodes[0x61] = new_opcode(0x61, "adc", adc, 2, 6, AddressingMode.IndirectX)
-  opcodes[0x71] = new_opcode(0x71, "adc", adc, 2, 5, AddressingMode.IndirectY) # +1 if page crossed
-  opcodes[0xe9] = new_opcode(0xe9, "sbc", sbc, 2, 2, AddressingMode.Immediate)
-  opcodes[0xe5] = new_opcode(0xe5, "sbc", sbc, 2, 3, AddressingMode.ZeroPage)
-  opcodes[0xf5] = new_opcode(0xf5, "sbc", sbc, 2, 4, AddressingMode.ZeroPageX)
-  opcodes[0xed] = new_opcode(0xed, "sbc", sbc, 3, 4, AddressingMode.Absolute)
-  opcodes[0xfd] = new_opcode(0xfd, "sbc", sbc, 3, 4, AddressingMode.AbsoluteX) # +1 if page crossed
-  opcodes[0xf9] = new_opcode(0xf9, "sbc", sbc, 3, 4, AddressingMode.AbsoluteY) # +1 if page crossed
-  opcodes[0xe1] = new_opcode(0xe1, "sbc", sbc, 2, 6, AddressingMode.IndirectX)
-  opcodes[0xf1] = new_opcode(0xf1, "sbc", sbc, 2, 5, AddressingMode.IndirectY) # +1 if page crossed
-  opcodes[0x38] = new_opcode(0x38, "sec", sec, 1, 2, AddressingMode.NoneAddressing)
-  opcodes[0x29] = new_opcode(0x29, "and", op_and, 2, 2, AddressingMode.Immediate)
-  opcodes[0x25] = new_opcode(0x25, "and", op_and, 2, 3, AddressingMode.ZeroPage)
-  opcodes[0x35] = new_opcode(0x35, "and", op_and, 2, 4, AddressingMode.ZeroPageX)
-  opcodes[0x2d] = new_opcode(0x2d, "and", op_and, 3, 4, AddressingMode.Absolute)
-  opcodes[0x3d] = new_opcode(0x3d, "and", op_and, 3, 4, AddressingMode.AbsoluteX) # +1 if page crossed
-  opcodes[0x39] = new_opcode(0x39, "and", op_and, 3, 4, AddressingMode.AbsoluteY) # +1 if page crossed
-  opcodes[0x21] = new_opcode(0x21, "and", op_and, 2, 6, AddressingMode.IndirectX) 
-  opcodes[0x31] = new_opcode(0x31, "and", op_and, 2, 5, AddressingMode.IndirectY) # +1 if page crossed
-  opcodes[0x0a] = new_opcode(0x0a, "asl", asl, 1, 2, AddressingMode.NoneAddressing)
-  opcodes[0x06] = new_opcode(0x06, "asl", asl, 1, 2, AddressingMode.ZeroPage)
-  opcodes[0x16] = new_opcode(0x16, "asl", asl, 1, 2, AddressingMode.ZeroPageX)
-  opcodes[0x0e] = new_opcode(0x0e, "asl", asl, 1, 2, AddressingMode.Absolute)
-  opcodes[0x1e] = new_opcode(0x1e, "asl", asl, 1, 2, AddressingMode.AbsoluteX)
-  opcodes[0x90] = new_opcode(0x90, "bcc", bcc, 2, 2, AddressingMode.Immediate) # +1 if branch succeeds +2 if to a new page
-  opcodes[0xb0] = new_opcode(0xb0, "bcs", bcs, 2, 2, AddressingMode.Immediate) # +1 if branch succeeds +2 if to a new page
-  opcodes[0xf0] = new_opcode(0xf0, "beq", beq, 2, 2, AddressingMode.Immediate) # +1 if branch succeeds +2 if to a new page
-  opcodes[0x24] = new_opcode(0x24, "bit", bit, 2, 3, AddressingMode.ZeroPage)
-  opcodes[0x2c] = new_opcode(0x2c, "bit", bit, 3, 4, AddressingMode.Absolute)
-  opcodes[0x30] = new_opcode(0x30, "bmi", bmi, 2, 2, AddressingMode.Immediate) # +1 if branch succeeds +2 if to a new page
-  opcodes[0xd0] = new_opcode(0xd0, "bne", bne, 2, 2, AddressingMode.Immediate) # +1 if branch succeeds +2 if to a new page
-  opcodes[0x10] = new_opcode(0x10, "bpl", bpl, 2, 2, AddressingMode.Immediate) # +1 if branch succeeds +2 if to a new page
-  opcodes[0x50] = new_opcode(0x50, "bvc", bvc, 2, 2, AddressingMode.Immediate) # +1 if branch succeeds +2 if to a new page
-  opcodes[0x70] = new_opcode(0x70, "bvs", bvs, 2, 2, AddressingMode.Immediate) # +1 if branch succeeds +2 if to a new page
-  opcodes[0x18] = new_opcode(0x18, "clc", clc, 1, 2, AddressingMode.NoneAddressing)
-  opcodes[0xd8] = new_opcode(0xd8, "cld", cld, 1, 2, AddressingMode.NoneAddressing)
-  opcodes[0x58] = new_opcode(0x58, "cli", cli, 1, 2, AddressingMode.NoneAddressing)
-  opcodes[0xb8] = new_opcode(0xb8, "clv", clv, 1, 2, AddressingMode.NoneAddressing)
-  opcodes[0xc9] = new_opcode(0xc9, "cmp", cmp, 2, 2, AddressingMode.Immediate)
-  opcodes[0xc5] = new_opcode(0xc5, "cmp", cmp, 2, 3, AddressingMode.ZeroPage)
-  opcodes[0xd5] = new_opcode(0xd5, "cmp", cmp, 2, 4, AddressingMode.ZeroPageX)
-  opcodes[0xcd] = new_opcode(0xcd, "cmp", cmp, 3, 4, AddressingMode.Absolute)
-  opcodes[0xdd] = new_opcode(0xdd, "cmp", cmp, 3, 4, AddressingMode.AbsoluteX) # +1 if page crossed
-  opcodes[0xd9] = new_opcode(0xd9, "cmp", cmp, 3, 4, AddressingMode.AbsoluteY) # +1 if page crossed
-  opcodes[0xc1] = new_opcode(0xc1, "cmp", cmp, 2, 6, AddressingMode.IndirectX)
-  opcodes[0xd1] = new_opcode(0xd1, "cmp", cmp, 2, 5, AddressingMode.IndirectY) # +1 if page crossed
-  opcodes[0xe0] = new_opcode(0xe0, "cpx", cpx, 2, 2, AddressingMode.Immediate)
-  opcodes[0xe4] = new_opcode(0xe4, "cpx", cpx, 2, 3, AddressingMode.ZeroPage)
-  opcodes[0xec] = new_opcode(0xec, "cpx", cpx, 3, 5, AddressingMode.Absolute)
-  opcodes[0xc0] = new_opcode(0xc0, "cpy", cpy, 2, 2, AddressingMode.Immediate)
-  opcodes[0xc4] = new_opcode(0xc4, "cpy", cpy, 2, 3, AddressingMode.ZeroPage)
-  opcodes[0xcc] = new_opcode(0xcc, "cpy", cpy, 3, 5, AddressingMode.Absolute)
-  opcodes[0x85] = new_opcode(0x85, "sta", sta, 2, 3, AddressingMode.ZeroPage)
-  opcodes[0x95] = new_opcode(0x95, "sta", sta, 2, 4, AddressingMode.ZeroPageX)
-  opcodes[0x8d] = new_opcode(0x8d, "sta", sta, 3, 4, AddressingMode.Absolute)
-  opcodes[0x9d] = new_opcode(0x9d, "sta", sta, 3, 5, AddressingMode.AbsoluteX)
-  opcodes[0x99] = new_opcode(0x99, "sta", sta, 3, 5, AddressingMode.AbsoluteY)
-  opcodes[0x81] = new_opcode(0x81, "sta", sta, 2, 6, AddressingMode.IndirectX)
-  opcodes[0x91] = new_opcode(0x91, "sta", sta, 2, 6, AddressingMode.IndirectY)
-  opcodes[0x86] = new_opcode(0x86, "stx", stx, 2, 3, AddressingMode.ZeroPage)
-  opcodes[0x96] = new_opcode(0x96, "stx", stx, 2, 4, AddressingMode.ZeroPageY)
-  opcodes[0x8e] = new_opcode(0x8e, "stx", stx, 3, 4, AddressingMode.Absolute)
-  opcodes[0x84] = new_opcode(0x84, "sty", sty, 2, 3, AddressingMode.ZeroPage)
-  opcodes[0x94] = new_opcode(0x94, "sty", sty, 2, 4, AddressingMode.ZeroPageX)
-  opcodes[0x8c] = new_opcode(0x8c, "sty", sty, 3, 4, AddressingMode.Absolute)
-  opcodes[0xa8] = new_opcode(0xa8, "tay", tay, 1, 2, AddressingMode.NoneAddressing)
-  opcodes[0xba] = new_opcode(0xba, "tsx", tsx, 1, 2, AddressingMode.NoneAddressing)
-  opcodes[0x8a] = new_opcode(0x8a, "txa", txa, 1, 2, AddressingMode.NoneAddressing)
-  opcodes[0x9a] = new_opcode(0x9a, "txs", txs, 1, 2, AddressingMode.NoneAddressing)
-  opcodes[0x98] = new_opcode(0x98, "tya", tya, 1, 2, AddressingMode.NoneAddressing)
+  opcodes[0x00] = new_opcode(0x00, "brk", brk, 1, 7, NoneAddressing)
+  opcodes[0xaa] = new_opcode(0xaa, "tax", tax, 1, 2, NoneAddressing)
+  opcodes[0xe8] = new_opcode(0xe8, "inx", inx, 1, 2, NoneAddressing)
+  opcodes[0xa9] = new_opcode(0xa9, "lda", lda, 2, 2, Immediate)
+  opcodes[0xa5] = new_opcode(0xa5, "lda", lda, 2, 3, ZeroPage)
+  opcodes[0xb5] = new_opcode(0xb5, "lda", lda, 2, 4, ZeroPageX)
+  opcodes[0xad] = new_opcode(0xad, "lda", lda, 3, 4, Absolute)
+  opcodes[0xbd] = new_opcode(0xbd, "lda", lda, 3, 4, AbsoluteX) # +1 if page crossed
+  opcodes[0xb9] = new_opcode(0xb9, "lda", lda, 3, 4, AbsoluteY) # +1 if page crossed
+  opcodes[0xa1] = new_opcode(0xa1, "lda", lda, 2, 6, IndirectX)
+  opcodes[0xb1] = new_opcode(0xb1, "lda", lda, 2, 5, IndirectY) # +1 if page crossed
+  opcodes[0x69] = new_opcode(0x69, "adc", adc, 2, 2, Immediate)
+  opcodes[0x65] = new_opcode(0x65, "adc", adc, 2, 3, ZeroPage)
+  opcodes[0x75] = new_opcode(0x75, "adc", adc, 2, 4, ZeroPageX)
+  opcodes[0x6d] = new_opcode(0x6d, "adc", adc, 3, 4, Absolute)
+  opcodes[0x7d] = new_opcode(0x7d, "adc", adc, 3, 4, AbsoluteX) # +1 if page crossed
+  opcodes[0x79] = new_opcode(0x79, "adc", adc, 3, 4, AbsoluteY) # +1 if page crossed
+  opcodes[0x61] = new_opcode(0x61, "adc", adc, 2, 6, IndirectX)
+  opcodes[0x71] = new_opcode(0x71, "adc", adc, 2, 5, IndirectY) # +1 if page crossed
+  opcodes[0xe9] = new_opcode(0xe9, "sbc", sbc, 2, 2, Immediate)
+  opcodes[0xe5] = new_opcode(0xe5, "sbc", sbc, 2, 3, ZeroPage)
+  opcodes[0xf5] = new_opcode(0xf5, "sbc", sbc, 2, 4, ZeroPageX)
+  opcodes[0xed] = new_opcode(0xed, "sbc", sbc, 3, 4, Absolute)
+  opcodes[0xfd] = new_opcode(0xfd, "sbc", sbc, 3, 4, AbsoluteX) # +1 if page crossed
+  opcodes[0xf9] = new_opcode(0xf9, "sbc", sbc, 3, 4, AbsoluteY) # +1 if page crossed
+  opcodes[0xe1] = new_opcode(0xe1, "sbc", sbc, 2, 6, IndirectX)
+  opcodes[0xf1] = new_opcode(0xf1, "sbc", sbc, 2, 5, IndirectY) # +1 if page crossed
+  opcodes[0x38] = new_opcode(0x38, "sec", sec, 1, 2, NoneAddressing)
+  opcodes[0x29] = new_opcode(0x29, "and", op_and, 2, 2, Immediate)
+  opcodes[0x25] = new_opcode(0x25, "and", op_and, 2, 3, ZeroPage)
+  opcodes[0x35] = new_opcode(0x35, "and", op_and, 2, 4, ZeroPageX)
+  opcodes[0x2d] = new_opcode(0x2d, "and", op_and, 3, 4, Absolute)
+  opcodes[0x3d] = new_opcode(0x3d, "and", op_and, 3, 4, AbsoluteX) # +1 if page crossed
+  opcodes[0x39] = new_opcode(0x39, "and", op_and, 3, 4, AbsoluteY) # +1 if page crossed
+  opcodes[0x21] = new_opcode(0x21, "and", op_and, 2, 6, IndirectX) 
+  opcodes[0x31] = new_opcode(0x31, "and", op_and, 2, 5, IndirectY) # +1 if page crossed
+  opcodes[0x0a] = new_opcode(0x0a, "asl", asl, 1, 2, NoneAddressing)
+  opcodes[0x06] = new_opcode(0x06, "asl", asl, 1, 2, ZeroPage)
+  opcodes[0x16] = new_opcode(0x16, "asl", asl, 1, 2, ZeroPageX)
+  opcodes[0x0e] = new_opcode(0x0e, "asl", asl, 1, 2, Absolute)
+  opcodes[0x1e] = new_opcode(0x1e, "asl", asl, 1, 2, AbsoluteX)
+  opcodes[0x90] = new_opcode(0x90, "bcc", bcc, 2, 2, Immediate) # +1 if branch succeeds +2 if to a new page
+  opcodes[0xb0] = new_opcode(0xb0, "bcs", bcs, 2, 2, Immediate) # +1 if branch succeeds +2 if to a new page
+  opcodes[0xf0] = new_opcode(0xf0, "beq", beq, 2, 2, Immediate) # +1 if branch succeeds +2 if to a new page
+  opcodes[0x24] = new_opcode(0x24, "bit", bit, 2, 3, ZeroPage)
+  opcodes[0x2c] = new_opcode(0x2c, "bit", bit, 3, 4, Absolute)
+  opcodes[0x30] = new_opcode(0x30, "bmi", bmi, 2, 2, Immediate) # +1 if branch succeeds +2 if to a new page
+  opcodes[0xd0] = new_opcode(0xd0, "bne", bne, 2, 2, Immediate) # +1 if branch succeeds +2 if to a new page
+  opcodes[0x10] = new_opcode(0x10, "bpl", bpl, 2, 2, Immediate) # +1 if branch succeeds +2 if to a new page
+  opcodes[0x50] = new_opcode(0x50, "bvc", bvc, 2, 2, Immediate) # +1 if branch succeeds +2 if to a new page
+  opcodes[0x70] = new_opcode(0x70, "bvs", bvs, 2, 2, Immediate) # +1 if branch succeeds +2 if to a new page
+  opcodes[0x18] = new_opcode(0x18, "clc", clc, 1, 2, NoneAddressing)
+  opcodes[0xd8] = new_opcode(0xd8, "cld", cld, 1, 2, NoneAddressing)
+  opcodes[0x58] = new_opcode(0x58, "cli", cli, 1, 2, NoneAddressing)
+  opcodes[0xb8] = new_opcode(0xb8, "clv", clv, 1, 2, NoneAddressing)
+  opcodes[0xc9] = new_opcode(0xc9, "cmp", cmp, 2, 2, Immediate)
+  opcodes[0xc5] = new_opcode(0xc5, "cmp", cmp, 2, 3, ZeroPage)
+  opcodes[0xd5] = new_opcode(0xd5, "cmp", cmp, 2, 4, ZeroPageX)
+  opcodes[0xcd] = new_opcode(0xcd, "cmp", cmp, 3, 4, Absolute)
+  opcodes[0xdd] = new_opcode(0xdd, "cmp", cmp, 3, 4, AbsoluteX) # +1 if page crossed
+  opcodes[0xd9] = new_opcode(0xd9, "cmp", cmp, 3, 4, AbsoluteY) # +1 if page crossed
+  opcodes[0xc1] = new_opcode(0xc1, "cmp", cmp, 2, 6, IndirectX)
+  opcodes[0xd1] = new_opcode(0xd1, "cmp", cmp, 2, 5, IndirectY) # +1 if page crossed
+  opcodes[0xe0] = new_opcode(0xe0, "cpx", cpx, 2, 2, Immediate)
+  opcodes[0xe4] = new_opcode(0xe4, "cpx", cpx, 2, 3, ZeroPage)
+  opcodes[0xec] = new_opcode(0xec, "cpx", cpx, 3, 5, Absolute)
+  opcodes[0xc0] = new_opcode(0xc0, "cpy", cpy, 2, 2, Immediate)
+  opcodes[0xc4] = new_opcode(0xc4, "cpy", cpy, 2, 3, ZeroPage)
+  opcodes[0xcc] = new_opcode(0xcc, "cpy", cpy, 3, 5, Absolute)
+  opcodes[0x85] = new_opcode(0x85, "sta", sta, 2, 3, ZeroPage)
+  opcodes[0x95] = new_opcode(0x95, "sta", sta, 2, 4, ZeroPageX)
+  opcodes[0x8d] = new_opcode(0x8d, "sta", sta, 3, 4, Absolute)
+  opcodes[0x9d] = new_opcode(0x9d, "sta", sta, 3, 5, AbsoluteX)
+  opcodes[0x99] = new_opcode(0x99, "sta", sta, 3, 5, AbsoluteY)
+  opcodes[0x81] = new_opcode(0x81, "sta", sta, 2, 6, IndirectX)
+  opcodes[0x91] = new_opcode(0x91, "sta", sta, 2, 6, IndirectY)
+  opcodes[0x86] = new_opcode(0x86, "stx", stx, 2, 3, ZeroPage)
+  opcodes[0x96] = new_opcode(0x96, "stx", stx, 2, 4, ZeroPageY)
+  opcodes[0x8e] = new_opcode(0x8e, "stx", stx, 3, 4, Absolute)
+  opcodes[0x84] = new_opcode(0x84, "sty", sty, 2, 3, ZeroPage)
+  opcodes[0x94] = new_opcode(0x94, "sty", sty, 2, 4, ZeroPageX)
+  opcodes[0x8c] = new_opcode(0x8c, "sty", sty, 3, 4, Absolute)
+  opcodes[0xa8] = new_opcode(0xa8, "tay", tay, 1, 2, NoneAddressing)
+  opcodes[0xba] = new_opcode(0xba, "tsx", tsx, 1, 2, NoneAddressing)
+  opcodes[0x8a] = new_opcode(0x8a, "txa", txa, 1, 2, NoneAddressing)
+  opcodes[0x9a] = new_opcode(0x9a, "txs", txs, 1, 2, NoneAddressing)
+  opcodes[0x98] = new_opcode(0x98, "tya", tya, 1, 2, NoneAddressing)
+  opcodes[0xc6] = new_opcode(0xc6, "dec", dec, 2, 5, ZeroPage)
+  opcodes[0xd6] = new_opcode(0xd6, "dec", dec, 2, 6, ZeroPageX)
+  opcodes[0xce] = new_opcode(0xce, "dec", dec, 3, 6, Absolute)
+  opcodes[0xde] = new_opcode(0xde, "dec", dec, 3, 7, AbsoluteX)
+  opcodes[0xca] = new_opcode(0xca, "dex", dex, 1, 2, NoneAddressing)
+  opcodes[0x88] = new_opcode(0x88, "dey", dey, 1, 2, NoneAddressing)
+  opcodes[0x49] = new_opcode(0x49, "eor", eor, 2, 2, Immediate)
+  opcodes[0x45] = new_opcode(0x45, "eor", eor, 2, 3, ZeroPage)
+  opcodes[0x55] = new_opcode(0x55, "eor", eor, 2, 4, ZeroPageX)
+  opcodes[0x4d] = new_opcode(0x4d, "eor", eor, 3, 4, Absolute)
+  opcodes[0x5d] = new_opcode(0x5d, "eor", eor, 3, 4, AbsoluteX) # +1 if page crossed
+  opcodes[0x59] = new_opcode(0x59, "eor", eor, 3, 4, AbsoluteY) # +1 if page crossed
+  opcodes[0x41] = new_opcode(0x41, "eor", eor, 2, 6, IndirectX)
+  opcodes[0x51] = new_opcode(0x51, "eor", eor, 2, 5, IndirectY) # +1 if page crossed
+
 
   return opcodes
 
@@ -546,6 +590,7 @@ proc run*(self: CPU) =
     self.program_counter += (inst.bytes - 1)
 
   #echo fmt"pc: {self.program_counter:x} o: {self.memory[self.program_counter]:x} a: {self.register_a:x} x: {self.register_x:x} y: {self.register_y:x} s: {self.status:b}"
+  #echo fmt"mem0x10: {self.mem_read(0x10):x}"
 
 proc load_and_run*(self: CPU, program: seq[uint8]) =
   self.load(program)
