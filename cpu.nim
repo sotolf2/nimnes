@@ -8,6 +8,7 @@ type AddressingMode = enum
   Absolute,
   AbsoluteX,
   AbsoluteY,
+  Indirect,
   IndirectX,
   IndirectY,
   NoneAddressing
@@ -49,13 +50,13 @@ proc wrapping_add(self: uint8, other: uint8): uint8 =
   if 0xff - other >= self:
     return self + other
   else:
-    return self - (0xff - other)
+    return 0x00 + other - 1
 
 proc wrapping_add(self: uint16, other: uint16): uint16 =
   if 0xffff - other >= self:
     return self + other
   else:
-    return self - (0xffff - other)
+    return 0x00 + other - 1
 
 proc newCPU*(): CPU =
   result = new CPU
@@ -76,6 +77,22 @@ proc mem_write_uint16(self: CPU, pos: uint16, data: uint16) =
   let lo = (data and 0xff).uint8
   self.mem_write(pos, lo)
   self.mem_write(pos + 1, hi)
+
+proc pop_stack(self: CPU): uint8 =
+  self.stack_pointer += 1
+  let stack_adr: uint16 = (0x01 shl 8) or self.stack_pointer.uint16
+  return self.mem_read(stack_adr)
+
+proc push_stack(self: CPU, data: uint8) =
+  let stack_adr: uint16 = (0x01 shl 8) or self.stack_pointer.uint16
+  self.mem_write(stack_adr, data)
+  self.stack_pointer -= 1
+
+proc push_stack_uint16(self: CPU, data: uint16) =
+  let hi = (data shr 8).uint8
+  let lo = (data and 0xff).uint8
+  self.push_stack(lo)
+  self.push_stack(hi)
 
 proc get_operand_address(self: CPU, mode: AddressingMode): uint16 =
   case mode
@@ -101,6 +118,11 @@ proc get_operand_address(self: CPU, mode: AddressingMode): uint16 =
     let base = self.mem_read_uint16(self.program_counter)
     let adr = base.wrapping_add(self.register_y).uint16
     return adr
+  of Indirect:
+    let base = self.mem_read_uint16(self.program_counter)
+    let lo = self.mem_read(base).uint16
+    let hi = self.mem_read(base.wrapping_add(1)).uint16
+    return (hi shl 8) or lo
   of IndirectX:
     let base = self.mem_read_uint16(self.program_counter)
     let pt = base.uint8.wrapping_add(self.register_x)
@@ -146,14 +168,14 @@ proc update_zero_and_negative_flags(self: CPU, res: uint8) =
 proc branch_relative(self: CPU, offset: uint8) =
   # if value is negative jump backwards
   # compensate for the current instruction
-  self.program_counter -= 1
+  #self.program_counter -= 1
   if (offset and 0x80'u8) == 0x80'u8:
     #echo fmt"value is negative {value:x}"
     let untwos_complent = (not offset) - 1
     #echo fmt"untwo's complement {untwos_complent}"
     self.program_counter -= untwos_complent
     #compensate for the addition we do after running an instruction
-    self.program_counter -= 1
+    self.program_counter -= 2
   else:
     self.program_counter += offset
     #compensate for addition after instruction
@@ -165,6 +187,20 @@ proc lda(self: CPU, mode: AddressingMode) =
 
   self.register_a = value
   self.update_zero_and_negative_flags(self.register_a)
+
+proc ldx(self: CPU, mode: AddressingMode) =
+  let adr = self.get_operand_address(mode)
+  let value = self.mem_read(adr)
+
+  self.register_x = value
+  self.update_zero_and_negative_flags(self.register_x)
+
+proc ldy(self: CPU, mode: AddressingMode) =
+  let adr = self.get_operand_address(mode)
+  let value = self.mem_read(adr)
+
+  self.register_y = value
+  self.update_zero_and_negative_flags(self.register_y)
 
 proc sta(self: CPU, mode: AddressingMode) =
   let adr = self.get_operand_address(mode)
@@ -255,6 +291,13 @@ proc dec(self: CPU, mode: AddressingMode) =
   self.mem_write(adr, result)
   self.update_zero_and_negative_flags(result)
 
+proc inc(self: CPU, mode: AddressingMode) =
+  let adr = self.get_operand_address(mode)
+  let value = self.mem_read(adr)
+  let result = value.wrapping_add(1)
+  self.mem_write(adr, result)
+  self.update_zero_and_negative_flags(result)
+
 proc dex(self: CPU, mode: AddressingMode) =
   self.register_x = self.register_x.wrapping_sub(1)
   self.update_zero_and_negative_flags(self.register_x)
@@ -276,6 +319,40 @@ proc eor(self: CPU, mode: AddressingMode) =
 
   self.register_a = (self.registera xor value)
   self.update_zero_and_negative_flags(self.register_a)
+
+proc ora(self: CPU, mode: AddressingMode) =
+  let adr = self.get_operand_address(mode)
+  let value = self.mem_read(adr)
+
+  self.register_a = (self.registera or value)
+  self.update_zero_and_negative_flags(self.register_a)
+
+proc lsr(self: CPU, mode: AddressingMode) =
+  if mode == AddressingMode.NoneAddressing:
+    let value = self.register_a
+    self.register_a = (self.register_a shr 1'u8)
+    self.update_zero_and_negative_flags(self.register_a)
+
+    #set carry flag
+    if (value and 0x01) == 0x01:
+      self.status = (self.status or 0x1)
+    else:
+      self.status = (self.status and 0xfe)
+  else:
+    let adr = self.get_operand_address(mode)
+    let value = self.mem_read(adr)
+    let result: uint8 = (value shr 1)
+    self.mem_write(adr, result)
+    #set carry flag
+    if (value and 0x01) == 0x01:
+      self.status = (self.status or 0x1)
+    else:
+      self.status = (self.status and 0xfe)
+    #set negative flag (no setting zero flag here since we don't muck with the register
+    if (result and 0x80'u8) == 0x80'u8:
+      self.status = (self.status or 0x80'u8)
+    else:
+      self.status = (self.status and 0x7f'u8)
 
 proc asl(self: CPU, mode: AddressingMode) =
   if mode == AddressingMode.NoneAddressing:
@@ -357,6 +434,23 @@ proc bvs(self: CPU, mode: AddressingMode) =
     let value = self.mem_read(adr)
     self.branch_relative(value)
 
+proc jmp(self: CPU, mode: AddressingMode) =
+  let adr = self.get_operand_address(mode)
+  #we have to compensate for the extra added
+  self.program_counter = adr - 1
+
+proc jsr(self: CPU, mode: AddressingMode) =
+  let adr = self.get_operand_address(mode)
+  let return_point = self.program_counter + 1
+  self.push_stack_uint16(return_point)
+  self.program_counter = adr - 1
+
+proc pha(self: CPU, mode: AddressingMode) =
+  self.push_stack(self.register_a)
+
+proc php(self: CPU, mode: AddressingMode) =
+  self.push_stack(self.status)
+
 proc bit(self: CPU, mode: AddressingMode) =
   let adr = self.get_operand_address(mode)
   let value = self.mem_read(adr)
@@ -403,11 +497,12 @@ proc tya(self: CPU, mode: AddressingMode) =
   self.update_zero_and_negative_flags(self.register_a)
 
 proc inx(self: CPU, mode: AddressingMode) =
-  if self.register_x == 0xff:
-    self.register_x = 0x00
-  else:
-    self.register_x += 1
+  self.register_x = self.register_x.wrapping_add(1)
   self.update_zero_and_negative_flags(self.register_x)
+
+proc iny(self: CPU, mode: AddressingMode) =
+  self.register_y = self.register_y.wrapping_add(1)
+  self.update_zero_and_negative_flags(self.register_y)
 
 proc sec(self: CPU, mode: AddressingMode) =
   self.status = (self.status or 0x01'u8)
@@ -468,6 +563,9 @@ proc sbc(self: CPU, mode: AddressingMode) =
 {.pop.}
 
 proc brk(self: CPU, mode: AddressingMode) =
+  discard
+
+proc nop(self: CPU, mode: AddressingMode) =
   discard
 
 proc build_opcode_table(): Table[uint8, Opcode] =
@@ -573,7 +671,40 @@ proc build_opcode_table(): Table[uint8, Opcode] =
   opcodes[0x59] = new_opcode(0x59, "eor", eor, 3, 4, AbsoluteY) # +1 if page crossed
   opcodes[0x41] = new_opcode(0x41, "eor", eor, 2, 6, IndirectX)
   opcodes[0x51] = new_opcode(0x51, "eor", eor, 2, 5, IndirectY) # +1 if page crossed
-
+  opcodes[0xe6] = new_opcode(0xe6, "inc", inc, 2, 5, ZeroPage)
+  opcodes[0xf6] = new_opcode(0xf6, "inc", inc, 2, 6, ZeroPageX)
+  opcodes[0xee] = new_opcode(0xee, "inc", inc, 3, 6, Absolute)
+  opcodes[0xfe] = new_opcode(0xfe, "inc", inc, 3, 7, AbsoluteX)
+  opcodes[0xc8] = new_opcode(0xc8, "iny", iny, 1, 2, NoneAddressing)
+  opcodes[0x4c] = new_opcode(0x4c, "jmp", jmp, 3, 3, Absolute)
+  opcodes[0x6c] = new_opcode(0x6c, "jmp", jmp, 3, 5, Indirect)
+  opcodes[0x20] = new_opcode(0x20, "jsr", jsr, 3, 6, Absolute)
+  opcodes[0xa2] = new_opcode(0xa2, "ldx", ldx, 2, 2, Immediate)
+  opcodes[0xa6] = new_opcode(0xa6, "ldx", ldx, 2, 3, ZeroPage)
+  opcodes[0xb6] = new_opcode(0xb6, "ldx", ldx, 2, 4, ZeroPageY)
+  opcodes[0xae] = new_opcode(0xae, "ldx", ldx, 3, 4, Absolute)
+  opcodes[0xbe] = new_opcode(0xbe, "ldx", ldx, 3, 4, AbsoluteY) # +1 if page crossed
+  opcodes[0xa0] = new_opcode(0xa0, "ldy", ldy, 2, 2, Immediate)
+  opcodes[0xa4] = new_opcode(0xa4, "ldy", ldy, 2, 3, ZeroPage)
+  opcodes[0xb4] = new_opcode(0xb4, "ldy", ldy, 2, 4, ZeroPageX)
+  opcodes[0xac] = new_opcode(0xac, "ldy", ldy, 3, 4, Absolute)
+  opcodes[0xbc] = new_opcode(0xbc, "ldy", ldy, 3, 4, AbsoluteX) # +1 if page crossed
+  opcodes[0x4a] = new_opcode(0x4a, "lsr", lsr, 1, 2, NoneAddressing)
+  opcodes[0x46] = new_opcode(0x46, "lsr", lsr, 2, 5, ZeroPage)
+  opcodes[0x56] = new_opcode(0x56, "lsr", lsr, 2, 6, ZeroPageX)
+  opcodes[0x4e] = new_opcode(0x4e, "lsr", lsr, 3, 6, Absolute)
+  opcodes[0x5e] = new_opcode(0x5e, "lsr", lsr, 3, 7, AbsoluteX)
+  opcodes[0xea] = new_opcode(0xea, "nop", nop, 1, 2, NoneAddressing)
+  opcodes[0x09] = new_opcode(0x09, "ora", ora, 2, 2, Immediate)
+  opcodes[0x05] = new_opcode(0x05, "ora", ora, 2, 3, ZeroPage)
+  opcodes[0x15] = new_opcode(0x15, "ora", ora, 2, 4, ZeroPageX)
+  opcodes[0x0d] = new_opcode(0x0d, "ora", ora, 3, 4, Absolute)
+  opcodes[0x1d] = new_opcode(0x1d, "ora", ora, 3, 4, AbsoluteX) # +1 if page crossed
+  opcodes[0x19] = new_opcode(0x19, "ora", ora, 3, 4, AbsoluteY) # +1 if page crossed
+  opcodes[0x01] = new_opcode(0x01, "ora", ora, 2, 6, IndirectX)
+  opcodes[0x11] = new_opcode(0x11, "ora", ora, 2, 5, IndirectY) # +1 if page crossed
+  opcodes[0x48] = new_opcode(0x48, "pha", pha, 1, 3, NoneAddressing)
+  opcodes[0x08] = new_opcode(0x08, "php", php, 1, 3, NoneAddressing)
 
   return opcodes
 
