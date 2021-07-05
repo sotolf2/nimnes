@@ -21,6 +21,7 @@ type CPU* = ref object
   program_counter*: uint16
   stack_pointer*: uint8
   memory*: array[0xFFFF,uint8]
+  counter_offset: uint16
 
 type Opcode = object
   opcode: uint8
@@ -82,6 +83,11 @@ proc pop_stack(self: CPU): uint8 =
   self.stack_pointer += 1
   let stack_adr: uint16 = (0x01 shl 8) or self.stack_pointer.uint16
   return self.mem_read(stack_adr)
+
+proc pop_stack_uint16(self: CPU): uint16 =
+  let hi = self.pop_stack().uint16
+  let lo = self.pop_stack().uint16
+  (hi shl 8) or (lo)
 
 proc push_stack(self: CPU, data: uint8) =
   let stack_adr: uint16 = (0x01 shl 8) or self.stack_pointer.uint16
@@ -357,7 +363,7 @@ proc lsr(self: CPU, mode: AddressingMode) =
 proc asl(self: CPU, mode: AddressingMode) =
   if mode == AddressingMode.NoneAddressing:
     let value = self.register_a
-    self.register_a = (self.register_a shl 1'u8)
+    self.register_a = (self.register_a shl 0x01'u8)
     self.update_zero_and_negative_flags(self.register_a)
 
     #set carry flag
@@ -377,6 +383,73 @@ proc asl(self: CPU, mode: AddressingMode) =
     else:
       self.status = (self.status and 0xfe'u8)
     #set negative flag (no setting zero flag here since we don't muck with the register
+    if (result and 0x80'u8) == 0x80'u8:
+      self.status = (self.status or 0x80'u8)
+    else:
+      self.status = (self.status and 0x7f'u8)
+
+proc rol(self: CPU, mode: AddressingMode) =
+  if mode == AddressingMode.NoneAddressing:
+    let value = self.register_a
+    self.register_a = (self.register_a shl 0x01'u8)
+    #add the carrybit if set
+    if (self.status and 0x01) == 0x01:
+      self.register_a += 0x01
+    self.update_zero_and_negative_flags(self.register_a)
+
+    #set carry flag
+    if (value and 0x80'u8) == 0x80'u8:
+      self.status = (self.status or 0x01'u8)
+    else: self.status = (self.status and 0xfe'u8)
+  else:
+    let adr = self.get_operand_address(mode)
+    let value = self.mem_read(adr)
+    var result: uint8 = (value shl 1)
+    # add carry bit if set
+    if (self.status and 0x01) == 0x01:
+      result += 0x01
+    # write back the result to memory
+    self.mem_write(adr, result)
+
+    # only set negative and carry, since we don't deal with the accumulator
+    if (value and 0x80'u8) == 0x80'u8:
+      self.status = (self.status or 0x01'u8)
+    else:
+      self.status = (self.status and 0xfe)
+    if (result and 0x80'u8) == 0x80'u8:
+      self.status = (self.status or 0x80'u8)
+    else:
+      self.status = (self.status and 0x7f'u8)
+
+
+proc ror(self: CPU, mode: AddressingMode) =
+  if mode == AddressingMode.NoneAddressing:
+    let value = self.register_a
+    self.register_a = (self.register_a shr 0x01'u8)
+    #add the carrybit if set
+    if (self.status and 0x01) == 0x01:
+      self.register_a = (self.register_a or 0x80'u8)
+    self.update_zero_and_negative_flags(self.register_a)
+
+    #set carry flag
+    if (value and 0x01'u8) == 0x01'u8:
+      self.status = (self.status or 0x01'u8)
+    else: self.status = (self.status and 0xfe'u8)
+  else:
+    let adr = self.get_operand_address(mode)
+    let value = self.mem_read(adr)
+    var result: uint8 = (value shr 1)
+    # add carry bit if set
+    if (self.status and 0x01) == 0x01:
+      result = (result or 0x80'u8)
+    # write back the result to memory
+    self.mem_write(adr, result)
+
+    # only set negative and carry, since we don't deal with the accumulator
+    if (value and 0x01'u8) == 0x01'u8:
+      self.status = (self.status or 0x01'u8)
+    else:
+      self.status = (self.status and 0xfe)
     if (result and 0x80'u8) == 0x80'u8:
       self.status = (self.status or 0x80'u8)
     else:
@@ -441,15 +514,30 @@ proc jmp(self: CPU, mode: AddressingMode) =
 
 proc jsr(self: CPU, mode: AddressingMode) =
   let adr = self.get_operand_address(mode)
-  let return_point = self.program_counter + 1
+  let return_point = self.program_counter + 1 + self.counter_offset
   self.push_stack_uint16(return_point)
-  self.program_counter = adr - 1
+  self.program_counter = adr - 2 # compensating for later added 
+
+proc rts(self: CPU, mode: AddressingMode) =
+  self.program_counter = self.pop_stack_uint16()
+  self.program_counter -= 1  # compensating for later added
+
+proc rti(self: CPU, mode: AddressingMode) =
+  self.status = self.pop_stack()
+  self.program_counter = self.pop_stack_uint16()
 
 proc pha(self: CPU, mode: AddressingMode) =
   self.push_stack(self.register_a)
 
+proc pla(self:CPU, mode:AddressingMode) =
+  self.register_a = self.pop_stack()
+  self.update_zero_and_negative_flags(self.register_a)
+
 proc php(self: CPU, mode: AddressingMode) =
   self.push_stack(self.status)
+
+proc plp(self: CPU, mode: AddressingMode) =
+  self.status = self.pop_stack()
 
 proc bit(self: CPU, mode: AddressingMode) =
   let adr = self.get_operand_address(mode)
@@ -705,6 +793,20 @@ proc build_opcode_table(): Table[uint8, Opcode] =
   opcodes[0x11] = new_opcode(0x11, "ora", ora, 2, 5, IndirectY) # +1 if page crossed
   opcodes[0x48] = new_opcode(0x48, "pha", pha, 1, 3, NoneAddressing)
   opcodes[0x08] = new_opcode(0x08, "php", php, 1, 3, NoneAddressing)
+  opcodes[0x68] = new_opcode(0x68, "pla", pla, 1, 4, NoneAddressing)
+  opcodes[0x28] = new_opcode(0x28, "plp", plp, 1, 4, NoneAddressing)
+  opcodes[0x2a] = new_opcode(0x2a, "rol", rol, 1, 2, NoneAddressing)
+  opcodes[0x26] = new_opcode(0x26, "rol", rol, 2, 5, ZeroPage)
+  opcodes[0x36] = new_opcode(0x36, "rol", rol, 2, 6, ZeroPageX)
+  opcodes[0x2e] = new_opcode(0x2e, "rol", rol, 3, 6, Absolute)
+  opcodes[0x3e] = new_opcode(0x3e, "rol", rol, 3, 7, AbsoluteX)
+  opcodes[0x6a] = new_opcode(0x6a, "ror", ror, 1, 2, NoneAddressing)
+  opcodes[0x66] = new_opcode(0x66, "ror", ror, 2, 5, ZeroPage)
+  opcodes[0x76] = new_opcode(0x76, "ror", ror, 2, 6, ZeroPageX)
+  opcodes[0x6e] = new_opcode(0x6e, "ror", ror, 3, 6, Absolute)
+  opcodes[0x7e] = new_opcode(0x7e, "ror", ror, 3, 7, AbsoluteX)
+  opcodes[0x40] = new_opcode(0x40, "rti", rti, 1, 6, NoneAddressing)
+  opcodes[0x60] = new_opcode(0x60, "rts", rts, 1, 6, NoneAddressing)
 
   return opcodes
 
@@ -717,6 +819,7 @@ proc run*(self: CPU) =
     #echo fmt"pc: {self.program_counter:x} o: {inst.name} a: {self.register_a:x} x: {self.register_x:x} y: {self.register_y:x} s: {self.status:b}"
 
     self.program_counter += 1
+    self.counter_offset = (inst.bytes - 1)
     inst.procedure(self, inst.mode)
     self.program_counter += (inst.bytes - 1)
 
