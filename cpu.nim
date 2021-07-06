@@ -1,4 +1,9 @@
-import strutils, strformat, tables
+import 
+  strutils,
+  strformat,
+  tables,
+  bus,
+  rom
 
 type AddressingMode = enum
   Immediate,
@@ -20,8 +25,8 @@ type CPU* = ref object
   status*: uint8 #NV-BDIZC
   program_counter*: uint16
   stack_pointer*: uint8
-  memory*: array[0xFFFF,uint8]
   counter_offset: uint16
+  bus*: Bus
 
 type Opcode = object
   opcode: uint8
@@ -63,10 +68,10 @@ proc newCPU*(): CPU =
   result = new CPU
 
 proc mem_read*(self: CPU, address: uint16): uint8 =
-  self.memory[address]
+  self.bus.mem_read(address)
 
 proc mem_write*(self: CPU, address: uint16, data: uint8) =
-  self.memory[address] = data 
+  self.bus.mem_write(address, data)
 
 proc mem_read_uint16(self: CPU, pos: uint16): uint16 =
   let lo = self.mem_read(pos).uint16
@@ -150,15 +155,11 @@ proc reset*(self: CPU) =
   self.register_x = 0
   self.status = 0x20
   self.stack_pointer = 0xff
-  self.program_counter = 0
-  self.program_counter = self.mem_read_uint16(0xFFFC)
+  self.program_counter = 0x8000
 
 proc load*(self: CPU, program: seq[uint8]) =
-  self.program_counter = 0x8000
-  for token in program:
-    self.memory[self.program_counter] = token
-    self.program_counter += 1
-  self.mem_write_uint16(0xFFFC, 0x8000)
+  let rom: Rom = new_rom_from_seq(program)
+  self.bus = new_bus(rom)
 
 proc update_zero_and_negative_flags(self: CPU, res: uint8) =
   if res == 0:
@@ -812,9 +813,10 @@ proc build_opcode_table(): Table[uint8, Opcode] =
 
 proc run*(self: CPU) =
   let opcodes = build_opcode_table()
+  #echo fmt"pc = {self.program_counter:x}"
 
-  while self.memory[self.program_counter] != 0x00'u8:
-    let opcode = self.memory[self.program_counter]
+  while self.mem_read(self.program_counter) != 0x00'u8:
+    let opcode = self.mem_read(self.program_counter)
     let inst = opcodes[opcode]
     #echo fmt"pc: {self.program_counter:x} o: {inst.name} a: {self.register_a:x} x: {self.register_x:x} y: {self.register_y:x} s: {self.status:b}"
 
@@ -823,7 +825,7 @@ proc run*(self: CPU) =
     inst.procedure(self, inst.mode)
     self.program_counter += (inst.bytes - 1)
 
-  #echo fmt"pc: {self.program_counter:x} o: {self.memory[self.program_counter]:x} a: {self.register_a:x} x: {self.register_x:x} y: {self.register_y:x} s: {self.status:b}"
+  #echo fmt"pc: {self.program_counter:x} o: brk a: {self.register_a:x} x: {self.register_x:x} y: {self.register_y:x} s: {self.status:b}"
   #echo fmt"mem0x10: {self.mem_read(0x10):x}"
 
 proc load_and_run*(self: CPU, program: seq[uint8]) =
